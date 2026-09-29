@@ -7,7 +7,10 @@ package oci
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -23,26 +26,51 @@ type Options struct {
 	// Host is the registry, e.g. "ghcr.io".
 	Host string
 	// Insecure allows plain HTTP, for local registries.
-	Insecure bool
-	Logger   ui.Logger
+	Insecure       bool
+	ConnectTimeout time.Duration
+	MaxTime        time.Duration
+	Logger         ui.Logger
 }
 
 // Client reads one OCI registry.
 type Client struct {
 	host     string
 	authOpt  remote.Option
+	transOpt remote.Option
 	insecure bool
-	log      ui.Logger
+	// maxTime bounds a single attempt end to end. go-containerregistry
+	// exposes no http.Client.Timeout equivalent (only WithTransport, which
+	// cannot cap a response body read that has already started), so this is
+	// applied by wrapping ctx instead -- see withTimeout.
+	maxTime time.Duration
+	log     ui.Logger
 }
 
 // New builds a client for one registry host.
 func New(creds auth.Credentials, opts Options) *Client {
 	return &Client{
-		host:     opts.Host,
-		authOpt:  remote.WithAuth(authenticator(creds)),
+		host:    opts.Host,
+		authOpt: remote.WithAuth(authenticator(creds)),
+		transOpt: remote.WithTransport(&http.Transport{
+			DialContext:         (&net.Dialer{Timeout: opts.ConnectTimeout}).DialContext,
+			TLSHandshakeTimeout: opts.ConnectTimeout,
+			MaxIdleConnsPerHost: 64,
+		}),
 		insecure: opts.Insecure,
+		maxTime:  opts.MaxTime,
 		log:      opts.Logger,
 	}
+}
+
+// withTimeout bounds a single attempt end to end, mirroring the Harbor
+// backend's http.Client.Timeout so a hung OCI registry cannot freeze a run
+// either. Zero leaves ctx as given, for callers (tests, mainly) that pass no
+// deadline at all.
+func (c *Client) withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if c.maxTime <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, c.maxTime)
 }
 
 // authenticator adapts our credentials to the library's interface, which also
@@ -91,7 +119,9 @@ func (c *Client) ListArtifacts(ctx context.Context, scope registry.Scope, repo r
 		return nil, fmt.Errorf("%s/%s: %w", scope.Name, repo.Name, err)
 	}
 
-	tags, err := remote.List(ref, remote.WithContext(ctx), c.authOpt)
+	ctx, cancel := c.withTimeout(ctx)
+	defer cancel()
+	tags, err := remote.List(ref, remote.WithContext(ctx), c.authOpt, c.transOpt)
 	if err != nil {
 		return nil, fmt.Errorf("listing tags of %s: %w", ref, err)
 	}

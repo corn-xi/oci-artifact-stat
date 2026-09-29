@@ -2,7 +2,6 @@ package oci
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -32,19 +31,29 @@ func (c *Client) catalog(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	repos, err := remote.Catalog(ctx, reg, c.authOpt)
+	ctx, cancel := c.withTimeout(ctx)
+	defer cancel()
+	repos, err := remote.Catalog(ctx, reg, c.authOpt, c.transOpt)
 	if err != nil {
-		// A 200 with a non-JSON body -- a CDN's catch-all index page for an
-		// unmapped path, among others -- reaches here as a raw json decode
-		// error from go-containerregistry. "invalid character '<'" reads as
-		// this tool being broken; say what actually happened instead.
-		var syntaxErr *json.SyntaxError
-		if errors.As(err, &syntaxErr) || strings.Contains(err.Error(), "invalid character") {
+		if unwantedHTML(err) {
 			return nil, fmt.Errorf("%w: the registry answered with something other than the OCI API -- check the URL points at a registry, not a web page", ErrNoCatalog)
 		}
 		return nil, fmt.Errorf("%w: %v", ErrNoCatalog, err)
 	}
 	return repos, nil
+}
+
+// unwantedHTML reports whether err carries a web page rather than an OCI API
+// response. go-containerregistry does not sanitize this itself: a 200 with
+// an unexpected body fails json decoding with "invalid character '<'", and a
+// non-2xx status embeds the full response body verbatim in the error text --
+// seen against hub.docker.com as several kilobytes of Cloudflare HTML, a
+// base64 image included, dumped straight to the terminal.
+func unwantedHTML(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "invalid character") ||
+		strings.Contains(msg, "<!doctype html") ||
+		strings.Contains(msg, "<html")
 }
 
 // ListScopes derives scopes from the catalog by taking each repository's

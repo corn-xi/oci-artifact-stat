@@ -66,9 +66,11 @@ func resolveConfigured(ctx context.Context, cfg config, creds auth.Credentials, 
 
 	host := registryHost(cfg.registryURL)
 	backend := oci.New(creds, oci.Options{
-		Host:     host,
-		Insecure: strings.HasPrefix(cfg.registryURL, "http://"),
-		Logger:   log,
+		Host:           host,
+		Insecure:       strings.HasPrefix(cfg.registryURL, "http://"),
+		ConnectTimeout: cfg.connectTimeout,
+		MaxTime:        cfg.maxTime,
+		Logger:         log,
 	})
 	t := target{backend: backend, kind: "OCI"}
 	if len(cfg.args) > 0 {
@@ -100,10 +102,15 @@ func resolveReferences(cfg config, creds auth.Credentials, log ui.Logger) (targe
 	}
 
 	return target{
-		backend: oci.New(creds, oci.Options{Host: host, Logger: log}),
-		scope:   registry.Scope{Name: host},
-		repos:   repos,
-		kind:    "OCI",
+		backend: oci.New(creds, oci.Options{
+			Host:           host,
+			ConnectTimeout: cfg.connectTimeout,
+			MaxTime:        cfg.maxTime,
+			Logger:         log,
+		}),
+		scope: registry.Scope{Name: host},
+		repos: repos,
+		kind:  "OCI",
 	}, nil
 }
 

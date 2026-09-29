@@ -3,6 +3,7 @@ package auth
 import (
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -130,6 +131,28 @@ func TestResolveOrder(t *testing.T) {
 			t.Errorf("got %+v, want an anonymous result rather than an error", got)
 		}
 	})
+}
+
+// readLine must consume exactly the username line and nothing past its
+// newline. bufio.Reader used to sit here instead: on a fast paste, the
+// username's newline and the very next thing typed -- the password or token
+// -- can arrive in the same underlying Read, and a buffered reader swallows
+// both into a buffer that is then thrown away. term.ReadPassword reads the
+// same fd directly right after and hangs forever waiting for input already
+// lost that way. This is what actually happened pasting a long token.
+func TestReadLineDoesNotConsumeWhatFollows(t *testing.T) {
+	r := strings.NewReader("user\nverylongtoken1234567890")
+	got, err := readLine(r)
+	if err != nil || got != "user" {
+		t.Fatalf("readLine = %q, %v, want %q", got, err, "user")
+	}
+	rest, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(rest) != "verylongtoken1234567890" {
+		t.Errorf("readLine consumed past the newline: rest = %q", rest)
+	}
 }
 
 // A secret can contain spaces; only the newline a shell adds is trimmed.

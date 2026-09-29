@@ -52,6 +52,37 @@ func TestListRepositoriesReportsANonJSONBodyClearly(t *testing.T) {
 	}
 }
 
+// A non-2xx status can carry an HTML error page as its body -- Cloudflare's
+// 404 for hub.docker.com does, complete with an embedded base64 image.
+// go-containerregistry's transport error embeds that body verbatim; it must
+// not reach the terminal as-is.
+func TestListRepositoriesReportsAnHTMLErrorPageClearly(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v2/" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusNotFound)
+		io.WriteString(w, `<!doctype html><html><head><title>404</title></head><body>not found</body></html>`)
+	}))
+	defer srv.Close()
+
+	_, err := testClient(t, srv).ListRepositories(context.Background(), registry.Scope{Name: "docker"})
+	if err == nil {
+		t.Fatal("ListRepositories() = nil error, want one reporting the HTML page")
+	}
+	if strings.Contains(err.Error(), "<html") || strings.Contains(err.Error(), "<!doctype") {
+		t.Errorf("err = %q, leaked the raw HTML body instead of explaining the cause", err)
+	}
+	if !strings.Contains(err.Error(), "web page") {
+		t.Errorf("err = %q, want it to say the response was not the OCI API", err)
+	}
+	if !errors.Is(err, ErrNoCatalog) {
+		t.Errorf("err = %v, want it to wrap ErrNoCatalog", err)
+	}
+}
+
 func TestListRepositoriesKeepsARealCatalogError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v2/" {

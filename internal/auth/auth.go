@@ -5,7 +5,6 @@
 package auth
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"strings"
@@ -130,14 +129,21 @@ func prompt(opts Options) (Credentials, error) {
 
 	if c.Username == "" {
 		fmt.Fprint(opts.Prompt, "Registry username: ")
-		line, err := bufio.NewReader(opts.Stdin).ReadString('\n')
+		line, err := readLine(opts.Stdin)
 		if err != nil && line == "" {
 			return Credentials{}, fmt.Errorf("reading the username: %w", err)
 		}
 		c.Username = strings.TrimSpace(line)
 	}
 
-	fmt.Fprint(opts.Prompt, "Registry password or token: ")
+	// term.ReadPassword keeps the terminal in canonical mode (only echo is
+	// disabled) to get free line editing, which means it inherits the
+	// kernel's canonical-line-length cap -- MAX_CANON, 1024 bytes on
+	// macOS/BSD, ~4096 on Linux. A bearer token pasted past that limit is
+	// silently truncated at the terminal driver and never reaches a
+	// newline, hanging here forever with no way to detect it from here.
+	// --password-stdin bypasses the terminal entirely and has no such cap.
+	fmt.Fprint(opts.Prompt, "Registry password or token (long tokens: use --password-stdin instead): ")
 	secret, err := term.ReadPassword(opts.TerminalFD)
 	fmt.Fprintln(opts.Prompt)
 	if err != nil {
@@ -150,6 +156,31 @@ func prompt(opts Options) (Credentials, error) {
 	}
 	c.Password = string(secret)
 	return c, nil
+}
+
+// readLine reads exactly one line, one byte at a time. bufio.Reader would
+// buffer ahead in blocks and, on a fast paste, swallow the password/token
+// typed right after the username -- term.ReadPassword then reads the same fd
+// directly afterward and hangs forever waiting for input already lost inside
+// a bufio buffer that was thrown away.
+func readLine(r io.Reader) (string, error) {
+	var line []byte
+	b := make([]byte, 1)
+	for {
+		n, err := r.Read(b)
+		if n > 0 {
+			if b[0] == '\n' {
+				return strings.TrimRight(string(line), "\r"), nil
+			}
+			line = append(line, b[0])
+		}
+		if err != nil {
+			if len(line) > 0 {
+				return strings.TrimRight(string(line), "\r"), nil
+			}
+			return "", err
+		}
+	}
 }
 
 // readSecret takes everything on stdin, trimming only the trailing newline a

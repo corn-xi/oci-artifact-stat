@@ -221,8 +221,11 @@ func renderRun(cfg config, run audit.Run, log ui.Logger, stdout io.Writer, retri
 		}
 	}
 
-	for _, limit := range report.Limits(run) {
-		log.Info("Not checked: %s.", limit)
+	if limits := report.Limits(run); len(limits) > 0 {
+		fmt.Fprintln(stdout)
+		for _, limit := range limits {
+			log.Info("Not checked: %s.", limit)
+		}
 	}
 	// Past the cap the individual retry lines stopped, so the total is the
 	// only sign of how much the run fought the registry.
