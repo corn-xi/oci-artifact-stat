@@ -185,6 +185,28 @@ func TestRetriesTransientFailures(t *testing.T) {
 	}
 }
 
+// An HTML body (an error page, a login wall, a CDN's catch-all index page)
+// must not surface encoding/json's "invalid character '<'" as if the API had
+// sent malformed JSON -- that reads as a tool bug, not a wrong URL.
+func TestNonJSONBodyReportsAClearCause(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		io.WriteString(w, `<!doctype html><html><body>not an API</body></html>`)
+	}))
+	defer srv.Close()
+
+	_, err := testClient(t, srv, 0).ListScopes(context.Background())
+	if err == nil {
+		t.Fatal("ListScopes() = nil error, want one reporting a non-JSON body")
+	}
+	if strings.Contains(err.Error(), "invalid character") {
+		t.Errorf("err = %q, leaked the raw json.Unmarshal message instead of explaining the cause", err)
+	}
+	if !strings.Contains(err.Error(), "not JSON") {
+		t.Errorf("err = %q, want it to say the response was not JSON", err)
+	}
+}
+
 func TestResolveScope(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {

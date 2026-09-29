@@ -179,6 +179,21 @@ func codeString(code int) string {
 	return strconv.Itoa(code)
 }
 
+// unmarshalBody decodes a response body already confirmed to be HTTP 200,
+// and when it does not even look like JSON -- an HTML error page, a login
+// wall, a CDN's catch-all index page for an unmapped path -- says so instead
+// of surfacing encoding/json's "invalid character '<'" as if the API itself
+// had sent malformed JSON.
+func unmarshalBody(body []byte, v any, label string) error {
+	if err := json.Unmarshal(body, v); err != nil {
+		if trimmed := strings.TrimSpace(string(body)); trimmed == "" || (trimmed[0] != '{' && trimmed[0] != '[') {
+			return fmt.Errorf("%s: response was not JSON -- check the URL points at a registry API, not a web page", label)
+		}
+		return fmt.Errorf("%s: %w", label, err)
+	}
+	return nil
+}
+
 // fetchAllPages walks every page of a paginated endpoint. The separator is
 // chosen from whether baseURL already carries a query string, so this serves
 // both "/projects" and "/repositories?project_name=X".
@@ -197,8 +212,8 @@ func (c *Client) fetchAllPages(ctx context.Context, baseURL, label string) ([]js
 		}
 
 		var got []json.RawMessage
-		if err := json.Unmarshal(body, &got); err != nil {
-			return nil, fmt.Errorf("%s page %d: %w", label, page, err)
+		if err := unmarshalBody(body, &got, fmt.Sprintf("%s page %d", label, page)); err != nil {
+			return nil, err
 		}
 		all = append(all, got...)
 
@@ -274,8 +289,8 @@ func (c *Client) ResolveScope(ctx context.Context, ref string) (registry.Scope, 
 			return registry.Scope{}, err
 		}
 		var p apiProject
-		if err := json.Unmarshal(body, &p); err != nil {
-			return registry.Scope{}, fmt.Errorf("%s: %w", label, err)
+		if err := unmarshalBody(body, &p, label); err != nil {
+			return registry.Scope{}, err
 		}
 		if p.Name == "" {
 			return registry.Scope{}, errNotResolved(ref)
@@ -291,8 +306,8 @@ func (c *Client) ResolveScope(ctx context.Context, ref string) (registry.Scope, 
 		return registry.Scope{}, err
 	}
 	var found []apiProject
-	if err := json.Unmarshal(body, &found); err != nil {
-		return registry.Scope{}, fmt.Errorf("%s: %w", label, err)
+	if err := unmarshalBody(body, &found, label); err != nil {
+		return registry.Scope{}, err
 	}
 	if len(found) == 0 || found[0].ProjectID == 0 {
 		return registry.Scope{}, errNotResolved(ref)
@@ -358,8 +373,8 @@ func (c *Client) ListArtifacts(ctx context.Context, scope registry.Scope, repo r
 	}
 
 	var raw []apiArtifact
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, fmt.Errorf("'%s' artifacts: %w", repo.Name, err)
+	if err := unmarshalBody(body, &raw, fmt.Sprintf("'%s' artifacts", repo.Name)); err != nil {
+		return nil, err
 	}
 
 	artifacts := make([]registry.Artifact, 0, len(raw))
@@ -379,9 +394,17 @@ func (c *Client) ListArtifacts(ctx context.Context, scope registry.Scope, repo r
 // Probe reports whether a base URL is a Harbor instance.
 //
 // /api/v2.0/systeminfo answers without credentials, which is what makes
-// backend detection possible without asking the user to declare it.
+// backend detection possible without asking the user to declare it. A 200
+// alone is not proof: an S3/CloudFront-backed single-page app answers 200
+// with its own index page for any path, systeminfo included. The body must
+// at least be a JSON object -- not a specific field, since an anonymous
+// caller does not always get harbor_version back.
 func Probe(ctx context.Context, baseURL string, opts Options) bool {
 	c := New(baseURL, auth.Credentials{}, opts)
-	_, _, err := c.get(ctx, c.baseURL+"/api/v2.0/systeminfo", "registry probe")
-	return err == nil
+	body, _, err := c.get(ctx, c.baseURL+"/api/v2.0/systeminfo", "registry probe")
+	if err != nil {
+		return false
+	}
+	var obj map[string]json.RawMessage
+	return json.Unmarshal(body, &obj) == nil
 }

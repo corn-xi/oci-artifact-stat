@@ -2,6 +2,7 @@ package oci
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -33,6 +34,14 @@ func (c *Client) catalog(ctx context.Context) ([]string, error) {
 	}
 	repos, err := remote.Catalog(ctx, reg, c.authOpt)
 	if err != nil {
+		// A 200 with a non-JSON body -- a CDN's catch-all index page for an
+		// unmapped path, among others -- reaches here as a raw json decode
+		// error from go-containerregistry. "invalid character '<'" reads as
+		// this tool being broken; say what actually happened instead.
+		var syntaxErr *json.SyntaxError
+		if errors.As(err, &syntaxErr) || strings.Contains(err.Error(), "invalid character") {
+			return nil, fmt.Errorf("%w: the registry answered with something other than the OCI API -- check the URL points at a registry, not a web page", ErrNoCatalog)
+		}
 		return nil, fmt.Errorf("%w: %v", ErrNoCatalog, err)
 	}
 	return repos, nil
