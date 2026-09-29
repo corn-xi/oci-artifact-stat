@@ -83,6 +83,83 @@ func TestListRepositoriesReportsAnHTMLErrorPageClearly(t *testing.T) {
 	}
 }
 
+// ListArtifacts is the path hit for every audited repository, not only
+// catalog listing, and must be just as protected against a web page in
+// place of an OCI API response.
+func TestListArtifactsReportsANonJSONBodyClearly(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v2/" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		io.WriteString(w, `<!doctype html><html><body>not a registry</body></html>`)
+	}))
+	defer srv.Close()
+
+	_, err := testClient(t, srv).ListArtifacts(context.Background(),
+		registry.Scope{Name: "docker"}, registry.Repository{Name: "library/alpine"}, 0)
+	if err == nil {
+		t.Fatal("ListArtifacts() = nil error, want one reporting a non-JSON body")
+	}
+	if strings.Contains(err.Error(), "invalid character") {
+		t.Errorf("err = %q, leaked the raw json decode error instead of explaining the cause", err)
+	}
+	if !strings.Contains(err.Error(), "web page") {
+		t.Errorf("err = %q, want it to say the response was not the OCI API", err)
+	}
+}
+
+func TestListArtifactsReportsAnHTMLErrorPageClearly(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v2/" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusNotFound)
+		io.WriteString(w, `<!doctype html><html><head><title>404</title></head><body>not found</body></html>`)
+	}))
+	defer srv.Close()
+
+	_, err := testClient(t, srv).ListArtifacts(context.Background(),
+		registry.Scope{Name: "docker"}, registry.Repository{Name: "library/alpine"}, 0)
+	if err == nil {
+		t.Fatal("ListArtifacts() = nil error, want one reporting the HTML page")
+	}
+	if strings.Contains(err.Error(), "<html") || strings.Contains(err.Error(), "<!doctype") {
+		t.Errorf("err = %q, leaked the raw HTML body instead of explaining the cause", err)
+	}
+	if !strings.Contains(err.Error(), "web page") {
+		t.Errorf("err = %q, want it to say the response was not the OCI API", err)
+	}
+}
+
+func TestListArtifactsKeepsARealError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v2/" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		io.WriteString(w, `{"errors":[{"code":"UNAUTHORIZED","message":"authentication required"}]}`)
+	}))
+	defer srv.Close()
+
+	_, err := testClient(t, srv).ListArtifacts(context.Background(),
+		registry.Scope{Name: "docker"}, registry.Repository{Name: "library/alpine"}, 0)
+	if err == nil {
+		t.Fatal("ListArtifacts() = nil error, want one reporting the 401")
+	}
+	if strings.Contains(err.Error(), "web page") {
+		t.Errorf("err = %q, a real UNAUTHORIZED must keep the backend's own words, not the non-JSON hint", err)
+	}
+	if !strings.Contains(err.Error(), "UNAUTHORIZED") {
+		t.Errorf("err = %q, want the backend's own error code preserved", err)
+	}
+}
+
 func TestListRepositoriesKeepsARealCatalogError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v2/" {

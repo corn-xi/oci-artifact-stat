@@ -123,6 +123,9 @@ func (c *Client) ListArtifacts(ctx context.Context, scope registry.Scope, repo r
 	defer cancel()
 	tags, err := remote.List(ref, remote.WithContext(ctx), c.authOpt, c.transOpt)
 	if err != nil {
+		if unwantedHTML(err) {
+			return nil, fmt.Errorf("listing tags of %s: the registry answered with something other than the OCI API -- check the URL points at a registry, not a web page", ref)
+		}
 		return nil, fmt.Errorf("listing tags of %s: %w", ref, err)
 	}
 
