@@ -1,0 +1,63 @@
+name: Bug report
+description: Something the tool got wrong, or a registry it misreads
+labels: [bug]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Tagging conventions differ wildly between registries, and a rule that
+        works on one can misread another. The `--explain` output below is what
+        makes that diagnosable without access to your registry, so please
+        include it — it says what the tool saw, not what it concluded.
+
+        Do not paste credentials. The output does not contain any.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected instead
+      placeholder: |
+        Reported 3.0.0 as the latest version of payments-api, but the latest
+        release is 2.12.0 — that is what the chart is tagged with.
+    validations:
+      required: true
+
+  - type: input
+    id: command
+    attributes:
+      label: The command you ran
+      placeholder: oci-artifact-stat --artifact-window 100 platform
+    validations:
+      required: true
+
+  - type: textarea
+    id: explain
+    attributes:
+      label: Output of the same command with --explain -o json
+      description: >
+        Add `--explain -o json` to the command above and paste the result.
+        The `explain` object on each repository is the important part.
+      render: json
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `oci-artifact-stat --version`
+      placeholder: oci-artifact-stat 0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: registry
+    attributes:
+      label: Registry
+      description: >
+        Which kind, and publicly reachable or not. The banner's "Registry:"
+        line says which backend was detected.
+      placeholder: Harbor 2.10, internal
+    validations:
+      required: true

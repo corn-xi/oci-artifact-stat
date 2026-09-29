@@ -1,0 +1,7 @@
+
+ID | NAME     | REPOS | VISIBILITY
+---+----------+-------+-----------
+7  | platform | 7     | private
+12 | payments | 3     | public
+
+[INFO] Total: 2 scopes -- pass either ID or NAME as <scope>

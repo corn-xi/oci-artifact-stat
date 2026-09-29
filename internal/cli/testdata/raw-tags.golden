@@ -1,0 +1,31 @@
+=========================================
+[ OK ] Connected to scope successfully!
+Registry:           Harbor
+Scope name (UI):    platform
+Scope ID (URL):     7
+=========================================
+[INFO] Fetching repository list...
+[INFO] Fetching application list and versions...
+
+IMAGE           | VER.               | STATUS
+----------------+--------------------+--------
+api-gateway     | 2.4.1              | OK
+charts-mixed    | 1.0.0              | OK
+group/sub/repo  | 3.2.1              | OK
+legacy-app      | -                  | FAIL
+no-tags         | <no tags>          | EMPTY
+qualified-only  | 2.18.0-rel-build42 | OK
+worker-service  | 1.11.2             | WARN
+next-release    | 2.9.0              | OK
+rc-only         | 4.0.0-rc2          | WARN
+chart-versioned | 3.0.0-rel-svc      | WARN
+chart-agreeing  | 2.24.0-rel-svc     | OK
+
+[INFO] Details:
+  [FAIL] 'legacy-app': artifact fetch failed, HTTP 404
+  [WARN] 'worker-service': '1.9.0' (v1.9.0) was published at 2026-09-06T10:00:00Z, after the higher '1.11.2' (v1.11.2) at 2026-08-06T10:00:00Z -- check for stale or duplicate publishing.
+  [WARN] 'chart-versioned': '2.12.0-rel-svc' (v2.12.0) was published at 2026-08-25T14:30:41Z, after the higher '3.0.0-rel-svc' (v3.0.0) at 2026-08-25T14:06:30Z -- check for stale or duplicate publishing.
+  [WARN] 'rc-only': no released version found; the reported version is a prerelease. Pass --include-prereleases to select prereleases deliberately.
+  [WARN] 'chart-versioned': CHART artifacts report v2.12.0 (newest tag '2.12.0-rel', pushed 2026-09-18T08:14:19Z) while the IMAGE artifacts inspected here report v3.0.0, and newer IMAGE artifacts carry no readable version -- the two views disagree; pass --artifact-type chart to read the other one.
+
+[INFO] Total: 11 repositories -- OK: 6, WARN: 3, FAIL: 1, EMPTY: 1

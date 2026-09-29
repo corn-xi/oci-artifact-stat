@@ -1,0 +1,50 @@
+version: 2
+
+project_name: oci-artifact-stat
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: oci-artifact-stat
+    main: ./cmd/oci-artifact-stat
+    binary: oci-artifact-stat
+    env:
+      # A static binary is the whole point: it has to run in a distroless or
+      # scratch CI image where neither a shell, nor jq, nor libc is present.
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w -X github.com/corn-xi/oci-artifact-stat/internal/cli.Version={{ .Version }}
+
+archives:
+    # No version in the name, so that
+    # releases/latest/download/oci-artifact-stat_linux_amd64.tar.gz is a
+    # stable URL the README can print. The version is in the release itself.
+  - name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: [README.md, LICENSE]
+
+nfpms:
+  - maintainer: corn-xi
+    description: Report the actual highest-published version of everything in a registry scope.
+    license: MIT
+    formats: [deb, rpm]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude: ['^docs:', '^test:', '^chore:']
+
