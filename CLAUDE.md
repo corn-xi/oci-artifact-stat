@@ -6,7 +6,7 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 
 `oci-artifact-stat` reports the actual highest-published version of everything published in a registry scope, flagging stale or duplicate publishing.
 
-A Go CLI (module `github.com/corn-xi/oci-artifact-stat/v2`, floor Go 1.25.0). Two direct dependencies: `golang.org/x/term` for the hidden prompt and `github.com/google/go-containerregistry` for the OCI backend, its bearer-token exchange and docker-config credentials. That second one was weighed: it adds ~50 linked packages and leaves the binary the same size (6.5 MB), while hand-rolling the credential-helper protocol is the kind of job that looks simple and is not.
+A Go CLI (module `github.com/corn-xi/oci-artifact-stat`, floor Go 1.25.0). Two direct dependencies: `golang.org/x/term` for the hidden prompt and `github.com/google/go-containerregistry` for the OCI backend, its bearer-token exchange and docker-config credentials. That second one was weighed: it adds ~50 linked packages and leaves the binary the same size (6.5 MB), while hand-rolling the credential-helper protocol is the kind of job that looks simple and is not.
 
 Two backends, chosen by probing rather than by a flag: Harbor's REST API and the OCI Distribution Spec.
 
@@ -17,7 +17,7 @@ go build -o bin/oci-artifact-stat ./cmd/oci-artifact-stat
 go test -race ./...
 go test ./internal/cli -update      # rewrite golden files after an intentional output change
 gofmt -l .                          # CI fails on any output here
-go vet ./... && staticcheck ./...   # both must be silent
+go vet ./... && go tool staticcheck ./...   # both run in CI, both must be silent
 go test -tags network ./...         # public registries, by hand before a release
 ```
 
@@ -38,7 +38,7 @@ internal/ui/               bracketed status tags and the color palette
 
 Data flows one way: the backend produces `registry.Artifact`s, `audit` turns them into `Result`s, `report` renders `Run`. **Analysis never formats and rendering never analyzes** — keep diagnostics as structured `Finding`s, never pre-formatted strings. That is what lets one audit feed three output formats.
 
-`resolveTarget()` in `internal/cli/target.go` is the **only** place allowed to import a backend. Everything downstream talks to `registry.Registry`.
+`resolveTarget()` in `internal/cli/target.go` is the **only** place allowed to import a backend. Everything downstream talks to `registry.Backend`.
 
 ### The interface split is deliberate
 
@@ -53,7 +53,7 @@ The second backend confirmed the split rather than contradicting it. Reading tag
 **A check that fires on nearly every repository is describing the registry, not the repository.** Treat that as an acceptance criterion, not a style note: it has been the failure mode of every finding added to this tool so far.
 
 - `version-on-other-type`, first trigger — "the highest versions differ" would have fired on every repository whose chart is versioned independently of its image.
-- `version-on-other-type`, second trigger — "the audited type lost recency" was measured at **21 warnings across 21 production repositories, 20 of which reported the identical version under both types**.
+- `version-on-other-type`, second trigger — "the audited type lost recency" alone, measured at **21 warnings across 21 production repositories** (full breakdown under Domain rules, below).
 - `push-time-unavailable` on the OCI backend — every row of every run, by construction, since that backend never has push times.
 - `no-version-tags` on a public Harbor — **8 of 8 repositories**, in eight near-identical sentences.
 - `window-truncated` as first written — would have fired on every repository with a full window. Caught before it shipped, by reasoning rather than by data; the only one of the five that was.
@@ -81,7 +81,7 @@ The cost of getting this wrong is not noise. It is that `--fail-on warn` stops b
 - **The `"{scope}/"` prefix filter in `ListRepositories` is load-bearing.** The `/repositories` endpoint is not reliably scoped by `project_name` alone.
 - **Pagination is not optional.** Two stop conditions, both needed: `X-Total-Count`, plus a short-page fallback for deployments that omit or miscount it. A single unpaginated call silently drops everything past page one — the original "missing images" bug.
 - **A limit that does not exist must not be reported either.** `registry.Capabilities.Windowed` is false for the OCI backend, which returns every tag in one request and therefore has no window to exhaust; the CLI then passes `ArtifactWindow: 0` and both `window-truncated` and `Explain.WindowFull` fall silent. Before this, `registry.k8s.io/pause` reported a full window over 33 artifacts it had read in their entirety.
-- **A failure keeps the backend's own words.** `failureReason` uses an HTTP status when one is known and the error text otherwise. A bare "HTTP 000" discarded the only useful part of an OCI error -- "DENIED", "name unknown" -- which is exactly what someone diagnosing a failed run needs.
+- **A failure keeps the backend's own words.** `failureReason` (`internal/audit/audit.go`) uses an HTTP status when one is known and the error text otherwise; its `cause()` helper strips `*url.Error`'s wrapper, which just repeats the request URL the report has already named. A bare "HTTP 000" discarded the only useful part of an OCI error -- "DENIED", "name unknown" -- which is exactly what someone diagnosing a failed run needs.
 - **A limit of the backend is stated once, not per repository.** `registry.Capabilities` lets a backend declare what it cannot answer; `Analyzer.NoPushTimes` then suppresses `push-time-unavailable` entirely and `Run.Limits` carries one run-level sentence instead. Without this the OCI backend, which never has push times, warned on every row of every run and made `--fail-on warn` useless there. The per-repository finding still fires when push times were *expected* and are missing.
 - **A finding shared by many repositories is stated once.** `report.Details` groups by code and collapses past `collapseAfter` (3) into one message plus the list of repositories. Seen on a public Harbor where eight of eight repositories reported `no-version-tags` in eight near-identical sentences. The grouping also means the block is ordered by first occurrence of each code rather than by repository.
 - **Every repository yields exactly one row.** A fetch failure is a `FAIL` row, never an absence. The four summary counters always sum to the rows printed.
@@ -91,7 +91,7 @@ The cost of getting this wrong is not noise. It is that `--fail-on warn` stops b
 
 ## Backends
 
-**Detection, not declaration.** `harbor.Probe` asks for `/api/v2.0/systeminfo`, which a real Harbor answers without credentials. One request per run, no flag, and **no retries** -- a failed probe is an answer, not a transient error. Both fake registries in the fixtures serve it; a fixture that does not will be treated as plain OCI, and the CLI says so rather than leaving the user to infer it from the banner.
+**Detection, not declaration.** `harbor.Probe` asks for `/api/v2.0/systeminfo`, which a real Harbor answers without credentials. One request per run, no flag, and **no retries** -- a failed probe is an answer, not a transient error. The e2e fixture (`fakeHarbor` in `internal/cli/e2e_test.go`) serves it; a registry that does not will be treated as plain OCI, and the CLI says so rather than leaving the user to infer it from the banner. `Probe` itself, and the whole OCI backend, have no dedicated unit tests yet -- see Known issues.
 
 **A registry URL without a scheme is normalized to https** (`normalizeURL`). net/http refuses a schemeless request with "unsupported protocol scheme", which surfaced as a failed probe and a silent fall back to OCI -- a working Harbor stopped listing its projects for want of eight characters.
 
@@ -111,7 +111,7 @@ The anonymous step is not a fallback nicety. Demanding credentials is what made 
 
 ## Concurrency
 
-`audit.RunAll` uses a hand-rolled bounded pool (semaphore channel plus `WaitGroup`). No `errgroup`: every goroutine returns `nil` by design, so its error propagation would be dead weight.
+`Analyzer.RunAll` uses a hand-rolled bounded pool (semaphore channel plus `WaitGroup`). No `errgroup`: every goroutine returns `nil` by design, so its error propagation would be dead weight.
 
 - **Write results by index into a preallocated slice, never `append` from a goroutine.** Row order must follow repository order regardless of completion order. `TestRowOrderIsDeterministicUnderConcurrency` guards this.
 - **Never skip starting a goroutine, even after cancellation.** `fetch` returns the context error immediately and `Analyze` turns it into a `FAIL` row; skipping would leave a zero-valued hole.
@@ -131,7 +131,6 @@ Retry only what retrying can fix: no response, `429` (honoring `Retry-After`), `
 - `report.Table` sizes columns to the longest actual value; a fixed width breaks the moment `--raw-tags` produces a longer tag.
 - **Colour and wrapping both hang off the destination being a terminal** (`ui.NewStyle`). `Style.Width` is zero for a pipe, which is what keeps captured output and the golden files byte-stable. Wrapping is done here, at word boundaries with a hanging indent, because the terminal's own wrapping breaks mid-word.
 - **Live progress is capped, not removed.** The first three retries are announced as they happen, so a slow run is visibly not hung; past that only the total is printed. Seven retry lines ahead of the table was the real complaint.
-- **A failure reports its cause, not its request.** `cause()` strips `*url.Error`, whose text repeats the whole URL the report has already named.
 - **When failures are timeouts, say so and name the remedy** (`report.TimeoutHint`). A slow registry is indistinguishable from a broken one, and the fix is `--http patient` rather than a bug report.
 
 ## Comments
@@ -170,21 +169,9 @@ Practically: change `internal/cli/help.go` first, run the tests, then bring the 
 
 ## Naming contract
 
-Environment variables are namespaced by the tool, derived from the binary by the usual rule — uppercase, non-alphanumerics to underscores — so they are guessable rather than memorized (`GOLANGCI_LINT_*` from `golangci-lint`). Hence `OCI_IMAGE_STAT_*`, not `OIS_` or `OCISTAT_`.
+Environment variables are namespaced by the tool, derived from the binary by the usual rule — uppercase, non-alphanumerics to underscores — so they are guessable rather than memorized (`GOLANGCI_LINT_*` from `golangci-lint`). Hence `OCI_ARTIFACT_STAT_*`, not `OIS_` or `OCISTAT_`.
 
 The public vocabulary is **scope**, not "project": that is Harbor's word. `Scope` in the domain types, `"scope"` in JSON, `--list-scopes` on the CLI. `--list-projects`, `HARBOR_*` and `OCI_IMAGE_STAT_*` remain accepted as undocumented aliases, handled by `lookupEnv`/`applyEnv` in `internal/cli/config.go` with a single deprecation notice each.
-
-## Testing against real registries
-
-`internal/cli/network_test.go` runs against ghcr.io, quay.io, registry.k8s.io, mcr.microsoft.com, public.ecr.aws, Docker Hub and demo.goharbor.io, all anonymously, plus the error paths. It sits behind the `network` build tag, so an ordinary `go test ./...` never reaches it — **deliberately not in CI**: network, rate limits (Docker Hub allows 100 anonymous pulls per six hours per IP) and unrelated outages.
-
-Run it before a release and whenever the registry layer changes:
-
-```bash
-go test -tags network -v ./internal/cli/
-```
-
-It clears every credential variable and points `DOCKER_CONFIG` at an empty directory, so a developer's own `docker login` cannot make a run pass that would fail for everyone else. Version numbers are matched by prefix, not exactly: these registries keep publishing.
 
 ## Testing
 
@@ -195,6 +182,18 @@ It clears every credential variable and points `DOCKER_CONFIG` at an empty direc
 - `internal/cli/readme_test.go` — **the README and `--help` describe one interface, and the tests hold them to it**: the same flags, the same environment variables, the same finding codes, the same exit statuses, the same quoted defaults. Adding a flag to only one of them fails the build, which is the only way two documents stay in step. Backticks are stripped before comparing, since one is markdown and the other plain text.
 
 `escapeURI` matches `jq -sRr @uri` exactly (RFC 3986 unreserved). `url.PathEscape` and `url.QueryEscape` both differ; do not substitute them.
+
+### Against real registries
+
+`internal/cli/network_test.go` runs against ghcr.io, quay.io, registry.k8s.io, mcr.microsoft.com, public.ecr.aws, Docker Hub and demo.goharbor.io, all anonymously, plus the error paths. It sits behind the `network` build tag, so an ordinary `go test ./...` never reaches it — **deliberately not in CI**: network, rate limits (Docker Hub allows 100 anonymous pulls per six hours per IP) and unrelated outages.
+
+Run it before a release and whenever the registry layer changes:
+
+```bash
+go test -tags network -v ./internal/cli/
+```
+
+It clears every credential variable and points `DOCKER_CONFIG` at an empty directory, so a developer's own `docker login` cannot make a run pass that would fail for everyone else. Version numbers are matched by prefix, not exactly: these registries keep publishing.
 
 ## --explain
 
@@ -221,4 +220,5 @@ The retro look lives in the bracketed tags, the monospace table and 16-colour AN
 - **A repository can spend most of its window on artifacts that say nothing.** Measured in a real registry: 3 usable versions out of 20 artifacts, the rest meta/untagged, with 4 more versions discarded on charts. `--artifact-type` and `version-on-other-type` address the type half; the density half is why `--artifact-window` exists and why the stale-publish message reports how much of the window was usable.
 - **`stale-publish` cannot distinguish a deliberate backport from an accidental re-push** from a single API snapshot. A repository maintaining 2.x and 3.x in parallel will be flagged when the 2.x release follows the 3.x one. `extra_attrs.created` on Harbor's artifact (the image's build time, as opposed to its push time) is the data that would separate the two — an old build time with a fresh push time is a genuine re-push — and it is not read yet. Until then, the scoped `--ignore` is the answer.
 - The `Catalog`/`Inspector` split has one implementation and is therefore unproven.
+- **`harbor.Probe` and `internal/registry/oci` have no unit tests.** Detection and the whole OCI backend are exercised only through the Harbor e2e fixture and the opt-in `-tags network` suite against real registries -- nothing starts from a non-Harbor fixture to confirm the OCI fallback path in isolation.
 - `prereleaseMarker`'s list of markers is a judgement call. A project using an unusual marker will have it treated as a build qualifier, i.e. as a release.
