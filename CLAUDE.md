@@ -17,7 +17,7 @@ go build -o bin/oci-artifact-stat ./cmd/oci-artifact-stat
 go test -race ./...
 go test ./internal/cli -update      # rewrite golden files after an intentional output change
 gofmt -l .                          # CI fails on any output here
-go vet ./... && go tool staticcheck ./...   # both run in CI, both must be silent
+go vet ./... && go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...   # both run in CI, both must be silent
 go test -tags network ./...         # public registries, by hand before a release
 ```
 
